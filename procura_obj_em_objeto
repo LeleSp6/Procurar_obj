@@ -1,0 +1,443 @@
+
+
+alter  procedure procura_obj_em_objeto  
+(  
+ @obj_name            varchar(500) =null 
+,@schema_name         varchar(500) =  'dbo'  
+,@database_name       varchar(500) = null
+,@command_search      varchar(500) = 'into'
+,@qtd_statement_Acima int = 3 
+,@help bit = 0
+  
+)  
+as  
+/*
+Autor: Leandro Sampaio
+Minhas redes:
+Linkedin: https://www.linkedin.com/in/leandro-sampaio-510599117/
+Blog: https://blogdoleandrosp.blogspot.com/
+E-mail para contato: Leandro.sampaio.017@outlook.com
+*/  
+
+if @help = 1
+begin
+print 
+'-----------------------------------------------INFORMAÇÕES-------------------------------------------------------------------' +CHAR(13)
+ +'@obj_name             = Nome do objeto procurado dentro dos textos de objetos como, por exemplo funções e procedures' +char(13)
++'@schema_name          = esquema do objeto a ser procurado' +char(13)
++'@database_name        = Nome da base de dados onde o objeto deve ser procurado' +char(13)
++'@command_search       = Comando a ser procurado com o objetO' +char(13)
++'@qtd_statement_Acima  = Quantidade de statements acima quando o objeto por achado' +char(13)
+
+return;
+end
+
+
+SET @database_name = ISNULL(@database_name,DB_NAME())
+
+if  isnull(@database_name,'') =  ''
+begin
+print 'passagem de parametros incorreta!!'
+return;
+end
+ 
+begin  
+  
+if object_id('tempdb..##aux_obj') is not null  
+begin  
+drop table ##aux_obj   
+end  
+  
+create table  ##aux_obj  
+(  
+name_obj varchar(150)  
+)  
+  
+
+
+set @database_name = iif(left(@database_name,1) <> '[','['+@database_name,@database_name)  
+set @database_name = iif(right(@database_name,1) <> ']',@database_name+']',@database_name)  
+  
+declare @aux_procura_parent_obj nvarchar(max)  
+  
+set @aux_procura_parent_obj =  
+ 'select distinct object_name(id) as name_obj  
+ from '+@database_name+'..syscomments a 
+ where text like ''%' + @obj_name  +'%'+''''  
+   
+  
+ insert into ##aux_obj  
+ exec (@aux_procura_parent_obj)  
+ --print @aux_procura_parent_obj  
+  
+   
+declare @aux nvarchar(max)  
+ select @aux = (select  name_obj + ',' from ##aux_obj  
+for xml path(''))  
+  
+set  @aux =  left(@aux, len(@aux) -1)  
+set @aux = 'exec '+@database_name+ '.'+@schema_name+'.gerar_script_procs_v2 ' + ''''+  @aux + ''''  
+  
+exec (@aux)  
+  
+  
+  
+if OBJECT_ID('tempdb..#aux_update') is not null  
+begin  
+drop table #aux_update  
+end  
+  
+select distinct nm_obj, id = identity(int)   
+into #aux_update  
+from  ##aux_procs  
+where nm_obj is not null  
+  
+  
+update a  
+ set grp =  b.id  
+from ##aux_procs a   
+inner join  #aux_update b  
+on a.nm_obj =  b.nm_obj  
+  
+  
+  
+if OBJECT_ID('tempdb..#aux_Final')  
+is not null  
+begin  
+drop table #aux_Final  
+end  
+  
+;with cte  
+as  
+(  
+select text, grp  
+,id   
+,nm_obj  
+from ##aux_procs   
+)  
+, cte_2  
+as  
+  
+(  
+select *, id_por_grupo = ROW_NUMBER() over(partition by grp order by id) from cte  
+  
+  
+)  
+  
+ select    a.*,d.* into #aux_Final from cte_2 a  
+ cross apply (  
+ select text as stament_acima,b.id_por_grupo as id_por_grupo_stamente_Acima   from  cte_2  b  
+ where a.grp = b.grp  
+    
+  and b.id_por_grupo < a.id_por_grupo and b.id_por_grupo >= a.id_por_grupo - @qtd_statement_Acima  
+ ) as d  
+ where   
+ 1=1  
+ and (text like '%'+@obj_name+'%'  
+ and exists (  
+ select * from cte_2 d  
+ where a.grp = d.grp  
+ and a.id_por_grupo =  d.id_por_grupo  
+ and a.id = d.id
+ and d.text like '%'+@command_search+'%'  
+ and a.id_por_grupo =  id_por_grupo_stamente_Acima + 1 
+    
+ )  
+)  
+or ( text like '%'+@obj_name+'%'  
+and stament_acima like '%'+@command_search+'%'  
+)  
+order by id  
+  
+  
+  
+  
+  
+  
+select distinct nm_obj from #aux_Final  
+  
+  
+select * from #aux_Final  
+  
+  
+  
+  
+end  
+  
+go            
+alter  procedure gerar_script_procs_v2                      
+@nome_procs nvarchar(770)                 
+            
+as                        
+/*
+Autor: Leandro Sampaio
+Minhas redes:
+Linkedin: https://www.linkedin.com/in/leandro-sampaio-510599117/
+Blog: https://blogdoleandrosp.blogspot.com/
+E-mail para contato: Leandro.sampaio.017@outlook.com
+*/             
+                
+declare @sql_batch_001 nvarchar(max)                     
+,@cont int = 1                   
+,@qtd_tab int                  
+, @nome_proc nvarchar(770)                  
+,@objname nvarchar(776)                  
+,@columnname nvarchar(770) =  null                
+                
+create table #aux_select (                  
+id int identity,                   
+[text] nvarchar(max)      
+,nm_obj varchar(250)      
+)                  
+                    
+                                
+                                       
+declare @objs varchar(8000)                                                
+if @nome_procs is not null                          
+begin                          
+select @objs = 'select name, id from sys.sysobjects where name in(''' + REPLACE(replace(replace(@nome_procs,' ',''),' ',''), ',',''',''')  + ''') order by id'                                               
+end                          
+else                           
+                                       
+set @objs =  'select name, id =  object_id from sys.procedures where  type = '+ '''p'''                          
+                          
+                          
+create table #table (name varchar(256), id int)                                                
+insert into #table  exec (@objs)                          
+                   
+ IF OBJECT_ID('TEMPDB..#AUX_LACO') IS NOT NULL                  
+ BEGIN                  
+ DROP TABLE #aux_laco                  
+ END                  
+ select *, id_aux = identity(int) into #aux_laco from #table                   
+                  
+                  
+  set @qtd_tab =  (select count('') from #aux_laco)                  
+                  
+                      
+ while @cont <= @qtd_tab                   
+  begin                  
+  select @nome_proc = name from   #aux_laco where id_aux =  @cont                  
+                
+  set @objname =  @nome_proc                 
+                      
+                        
+set nocount on                        
+                        
+declare @dbname sysname                        
+,@objid int                        
+,@BlankSpaceAdded   int                        
+,@BasePos       int                        
+,@CurrentPos    int                        
+,@TextLength    int                        
+,@LineId        int                        
+,@AddOnLen      int                        
+,@LFCR          int             
+,@DefinedLength int                        
+,@SyscomText nvarchar(max)                        
+,@Line          nvarchar(max)                        
+                        
+select @DefinedLength = 1000                       
+select @BlankSpaceAdded = 0             
+          
+IF OBJECT_ID('TEMPDB..#CommentText') IS NOT NULL          
+BEGIN          
+  DROP TABLE #CommentText          
+  END          
+CREATE TABLE #CommentText                        
+(LineId int                        
+ ,Text  nvarchar(1000) )                        
+                     
+select @dbname = parsename(@objname,3)                        
+if @dbname is null                        
+ select @dbname = db_name()                        
+else if @dbname <> db_name()                        
+        begin                        
+                raiserror(15250,-1,-1)                        
+                return (1)                        
+        end                        
+                        
+                       
+select @objid = object_id(@objname)                        
+if (@objid is null)                        
+        begin                        
+  raiserror(15009,-1,-1,@objname,@dbname)                        
+  return (1)                        
+        end                        
+                        
+                     
+if ( @columnname is not null)                        
+    begin                   
+                    
+        if (select count(*) from sys.objects where object_id = @objid and type in ('S ','U ','TF'))=0                        
+            begin                        
+            raiserror(15218,-1,-1,@objname)                        
+                return(1)                        
+            end                        
+                    
+        if ((select 'count'=count(*) from sys.columns where name = @columnname and object_id = @objid) =0)                        
+            begin                        
+                raiserror(15645,-1,-1,@columnname)                        
+                return(1)                        
+    end                 
+    if (ColumnProperty(@objid, @columnname, 'IsComputed') = 0)                        
+  begin                        
+   raiserror(15646,-1,-1,@columnname)                        
+   return(1)                        
+  end                        
+                   
+        declare ms_crs_syscom  CURSOR LOCAL                        
+        FOR select text from syscomments where id = @objid and encrypted = 0 and number =                        
+                        (select column_id from sys.columns where name = @columnname and object_id = @objid)                        
+                        order by number,colid                        
+        FOR READ ONLY                        
+                        
+    end                        
+else if @objid < 0             
+ begin                        
+              
+  if (select count(*) from master.sys.syscomments where id = @objid and text is not null) = 0                        
+   begin                        
+    raiserror(15197,-1,-1,@objname)                        
+    return (1)                        
+   end                        
+                           
+  declare ms_crs_syscom CURSOR LOCAL FOR select text from master.sys.syscomments where id = @objid                        
+   ORDER BY number, colid FOR READ ONLY                        
+ end                        
+else                        
+    begin                        
+                   
+                           
+                   
+                   
+        if (select count(*) from syscomments c, sysobjects o where o.xtype not in ('S', 'U')                        
+            and o.id = c.id and o.id = @objid) = 0                        
+                begin                        
+                        raiserror(15197,-1,-1,@objname)                        
+                        return (1)                        
+                end                        
+                        
+        if (select count(*) from syscomments where id = @objid and encrypted = 0) = 0                        
+                begin                        
+                        raiserror(15471,-1,-1,@objname)                        
+                        return (0)                        
+                end                        
+                        
+  declare ms_crs_syscom  CURSOR LOCAL                        
+  FOR select text from syscomments where id = @objid and encrypted = 0                        
+    ORDER BY number, colid                        
+  FOR READ ONLY                        
+                        
+    end                        
+                        
+            
+                     
+            
+select @LFCR = 2                        
+select @LineId = 1                        
+                        
+                        
+OPEN ms_crs_syscom                        
+                        
+FETCH NEXT from ms_crs_syscom into @SyscomText                        
+                        
+WHILE @@fetch_status >= 0                        
+begin                        
+                        
+    select  @BasePos    = 1                        
+ select  @CurrentPos = 1                        
+    select  @TextLength = LEN(@SyscomText)                        
+                        
+    WHILE @CurrentPos  != 0                        
+    begin      
+                 
+        select @CurrentPos =   CHARINDEX(char(13)+char(10), @SyscomText, @BasePos)                        
+                        
+                 
+        IF @CurrentPos != 0                        
+        begin                        
+                       
+                      
+                 
+                 
+            while (isnull(LEN(@Line),0) + @BlankSpaceAdded + @CurrentPos-@BasePos + @LFCR) > @DefinedLength                        
+            begin                        
+                select @AddOnLen = @DefinedLength-(isnull(LEN(@Line),0) + @BlankSpaceAdded)                        
+                INSERT #CommentText VALUES                        
+                ( @LineId,                        
+                  isnull(@Line, N'') + isnull(SUBSTRING(@SyscomText, @BasePos, @AddOnLen), N''))                        
+                select @Line = NULL, @LineId = @LineId + 1,                
+                       @BasePos = @BasePos + @AddOnLen, @BlankSpaceAdded = 0                        
+            end                        
+            select @Line    = isnull(@Line, N'') + isnull(SUBSTRING(@SyscomText, @BasePos, @CurrentPos-@BasePos + @LFCR), N'')                        
+  select @BasePos = @CurrentPos+2                        
+            INSERT #CommentText VALUES( @LineId, @Line )                        
+            select @LineId = @LineId + 1                        
+            select @Line = NULL                        
+        end                        
+        else                        
+                  
+        begin                        
+            IF @BasePos <= @TextLength                        
+            begin                   
+                  
+                  
+                  
+                while (isnull(LEN(@Line),0) + @BlankSpaceAdded + @TextLength-@BasePos+1 ) > @DefinedLength                        
+                begin                        
+                    select @AddOnLen = @DefinedLength - (isnull(LEN(@Line),0) + @BlankSpaceAdded)                        
+                    INSERT #CommentText VALUES                        
+                    ( @LineId,                        
+                      isnull(@Line, N'') + isnull(SUBSTRING(@SyscomText, @BasePos, @AddOnLen), N''))                        
+                    select @Line = NULL, @LineId = @LineId + 1,                        
+                        @BasePos = @BasePos + @AddOnLen, @BlankSpaceAdded = 0                        
+                end                        
+                select @Line = isnull(@Line, N'') + isnull(SUBSTRING(@SyscomText, @BasePos, @TextLength-@BasePos+1 ), N'')                        
+                if LEN(@Line) < @DefinedLength and charindex(' ', @SyscomText, @TextLength+1 ) > 0                        
+                begin                        
+                    select @Line = @Line + ' ', @BlankSpaceAdded = 1                        
+                end                        
+            end                        
+        end                        
+    end                        
+                        
+ FETCH NEXT from ms_crs_syscom into @SyscomText                        
+end                        
+                        
+IF @Line is NOT NULL                        
+    INSERT #CommentText VALUES( @LineId, @Line )                        
+ insert into  #CommentText (LineId,Text)                      
+ select -1, 'separadordeobjcodi145485456anchsghs'--'if exists (select top 1 1 from sys.procedures where name ='+''''+@objname+''''+' ) begin drop procedure ' + @objname  + ' END '                      
+ insert into  #CommentText (LineId,Text)                      
+ select 0, 'GO '                       
+                       
+                      
+            
+insert into #aux_select (text,nm_obj)                
+select Text,@objname  as nm_obj from #CommentText order by LineId                  
+                
+insert into #aux_select (text) values (' GO ')                
+                
+              
+                        
+CLOSE  ms_crs_syscom                        
+DEALLOCATE  ms_crs_syscom                        
+                     
+     set @LineId = null          
+     set @Line = null          
+          
+DROP TABLE  #CommentText                        
+                
+set @cont +=1                
+                     
+end             
+if OBJECT_ID('tempdb..##aux_procs') is not null        
+begin        
+drop table ##aux_procs        
+end        
+        
+select text,id,nm_obj,grp = 0   
+into ##aux_procs   
+from #aux_select     
+order by id 
